@@ -17,6 +17,10 @@ export class ChatUsers {
   @OneToMany (type => Messages, message => message.user)
   messages: Messages ;
 
-  @ManyToOne(() => Messages, (messages) => messages.id)
+  @ManyToOne(() => Messages, { onDelete: 'SET NULL' })
   lastMessage: Messages;
+  
+  @Column({type: Boolean})
+  isLeft: boolean;
+  
 }

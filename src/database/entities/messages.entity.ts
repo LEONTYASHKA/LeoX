@@ -17,7 +17,7 @@ export class Messages {
   @ManyToOne (type=> Chat , chat => chat.chatUsers)
   chat: Chat;
 
-  @ManyToOne( type => ChatUsers, chatUser => chatUser.messages)
+  @ManyToOne( type => ChatUsers, chatUser => chatUser.messages, { onDelete: 'CASCADE' })
   user: ChatUsers;
 }
 

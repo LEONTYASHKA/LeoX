@@ -1,5 +1,5 @@
 import { ChatService } from './chat.service';
-import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
 import { RegisterDto } from '../auth/dtos/register.dto';
 import { CreateChatDto } from './dtos/create-chat.dto';
 import { User } from '../auth/decorators/user.decorator';
@@ -11,6 +11,8 @@ import { ChatInformationById } from './dtos/getChatById.dto';
 import { MessageDto, MessagesInfo } from './dtos/messagesInfo.dto';
 import { CreateMessageDto } from './dtos/createMessage.dto';
 import { query } from 'express';
+import { NewMethodGetChatInfo } from './dtos/newMethodGetChatIndo';
+import { ChatType } from 'src/common/enums/chat-type.enum';
 
 
 
@@ -49,8 +51,10 @@ export class ChatController {
 
 
   @Get()
-  async getChatInfo(@User() user: UserInterface):Promise<ChatsDto[]> {
-    return this.chatService.getChatInfo(user.sub);
+  async getChatInfo(@User() user: UserInterface, @Query("chat-types") chatType = ChatType.ALL):Promise<NewMethodGetChatInfo[]> {
+    return this.chatService.getChatInfo(user.sub, {
+      chatType,
+    });
   }
 
 @Post(":id/messages")
@@ -60,7 +64,7 @@ async createMessage(@User() user: UserInterface, @Param('id', new ParseIntPipe()
 
 @Post(':chatId/add-user')
 async addUserToChat(@Param('chatId') chatId: number, @Body('userId') userId: number) {
-  return this.chatService.addUserToChat(chatId, userId);
+  return this.chatService.addUserToChat(chatId, userId );
 }
 @Post(':chatId/set-last-read-message')
   async setLastReadMessage(
@@ -76,5 +80,20 @@ async getUnreadMessages(@Param('chatId', new ParseIntPipe()) chatId: number,
  @User() user: UserInterface): Promise<{ unreadMessages: number }> {
   const unreadMessages = await this.chatService.countUnreadMessages(chatId, user.sub);
   return { unreadMessages };
+}
+@Delete(':chatId/chat/:userId')
+async deleteMessage(
+  @Param('chatId', ) chatId: number,
+  @Param('userId', ) userId: number,
+  @User() user: UserInterface,
+) {
+  await this.chatService.deleteUserFromChat(chatId, userId, user.sub); 
+}
+@Post(':chatId/chats')
+async leftChat(
+  @Param('chatId',) chatId: number,
+  @User() user: UserInterface,
+){
+  await this.chatService.leftChat(chatId, user.sub);
 }
 }

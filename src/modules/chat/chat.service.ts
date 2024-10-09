@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { CreateChatDto } from './dtos/create-chat.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../../database/entities/user.entity';
-import { ArrayContains, In, MoreThan, Repository } from 'typeorm';
+import { ArrayContains, Db, In, MoreThan, Repository } from 'typeorm';
 import { Chat } from '../../database/entities/chat.entity';
 import { ChatUsers } from '../../database/entities/chatUsers.entity';
 import { Messages } from '../../database/entities/messages.entity';
@@ -12,6 +12,8 @@ import { ChatInformationById, } from './dtos/getChatById.dto';
 import { MessageDto, MessagesInfo } from './dtos/messagesInfo.dto';
 import { log } from 'console';
 import { text } from 'stream/consumers';
+import { NewMethodGetChatInfo } from './dtos/newMethodGetChatIndo';
+import { ChatType } from 'src/common/enums/chat-type.enum';
 
 
 
@@ -67,18 +69,19 @@ export class ChatService {
       throw new BadRequestException("you have aready chat with this user")
     }
     }
-      const newChat = await this.chatRepository.create({ name: "" });
+    const initator = await this.userRepository.findOneBy({ id })
+    const userChatContact = await this.userRepository.findOneBy({ id: userIdToChat })
+    const chatName = `${userChatContact.firstName} ${userChatContact.lastName} , ${initator.firstName} ${initator.lastName}`;
+      const newChat = await this.chatRepository.create({ name: chatName });
       const createdChat = await this.chatRepository.save(newChat);
   
-      const initator = await this.userRepository.findOneBy({ id })
+      
       const initiatorChatUser = await this.chatUsersRepository.create({
         chat: createdChat,
         user: initator
       })
      
-      await this.chatUsersRepository.save(initiatorChatUser)
-      const userChatContact = await this.userRepository.findOneBy({ id: userIdToChat })
-  
+      await this.chatUsersRepository.save(initiatorChatUser);
       const userChatContactToChat = await this.chatUsersRepository.create({
         chat: createdChat,
         user: userChatContact
@@ -89,65 +92,79 @@ export class ChatService {
       }
   }
 
-  async getChatInfo(userId: number): Promise<ChatsDto[]> {
-    const chatIds = await this.chatUsersRepository.find({
-      select: {
-        chat: {id: true}
-      },
-      where:{
-        user: {
-          id: userId
-        }
-      },
-      relations: {
-        chat: true,
-      }
+  async getChatInfo(userId: number, options: any): Promise<NewMethodGetChatInfo[]> {
+  const chatIds = await this.chatUsersRepository.find({
+    select: {
+      chat: { id: true },
+    },
+    where: {
+      user: { id: userId },
+      isLeft: false
+    },
+    relations: { chat: true },
+  });
+
+  const chatIdNumbers = chatIds.map((el) => el.chat.id);
+
+  // Получаем информацию о чатах
+  const chatsInfo: {id: number, name: string} []= await this.chatUsersRepository
+  .createQueryBuilder('chatUser')
+  .select(['chatUser.chatId', 'chatId'])
+  .addSelect('COUNT(chatUser.userId)', 'count')
+  .addSelect('chat.name','name')
+  .innerJoin('chatUser.chat', 'chat')
+  .groupBy('chatUser.chatId')
+  .having('count = :count', {count: 2 })
+    .andWhere(db =>{
+      const subQuery = db
+      .subQuery()
+      .select('chatUser.chatId')
+      .from(ChatUsers, 'chatUser')
+      .where('chatUser.userId = :userId', {userId})
+      .getQuery();
+        return 'chatUser.chatId IN' + subQuery
     })
-    console.log(chatIds);
-    const chatIdNumbers = chatIds.map((el) => {
-      
-      return el.chat.id;
+    .getRawMany();
+
+  await this.chatRepository.find({
+    where: { id: In(chatIdNumbers) },
+  });
+
+  // Для каждого чата получаем последнее сообщение и количество непрочитанных сообщений
+  const chatData = await Promise.all(chatsInfo.map(async (chat) => {
+    // Получаем последнее сообщение в чате, включая информацию о пользователе (sender)
+    const lastMessage = await this.messageRepository.findOne({
+      where: { chat: { id: chat.id } },
+      order: { createdAt: "DESC" }, // Самое последнее сообщение
+      relations: ['user', 'user.user'],  // Убедись, что загружаешь связь с user
     });
-    console.log(chatIdNumbers);
- 
-    const chatsInfo = await  this.chatRepository.find({
-      where: {
-        id: In(chatIdNumbers),
-      },
-      select: {
-        chatUsers: {
-          id: true,
-          user: {
-            firstName: true,
-            lastName: true,
-            id: true,
-          }
-        }
-      },
-      relations: ["chatUsers", "chatUsers.user"]
-      
-    })
+
+    // Если последнее сообщение не найдено или поле user не существует
+    const lastMessageData = lastMessage ? {
+
+      text: lastMessage.text,
+      createdAt: lastMessage.createdAt,
+      sender: lastMessage.user && lastMessage.user.user ? {
+        id: lastMessage.user.user.id,
+        firstName: lastMessage.user.user.firstName,
+        lastName: lastMessage.user.user.lastName,
+      } : null
+    } : null;
+
+    // Получаем количество непрочитанных сообщений
+    const unreadMessageCount = await this.countUnreadMessages(chat.id, userId);
+
+    return {
+      id: chat.id,
+      name: chat.name,
+      lastMessage: lastMessageData,
+      unreadMessageCount,
+    };
+  }));
+
+  return chatData;
+}
   
-      const usersInChat = await Promise.all(chatsInfo.map(async(el) => {
-        return {
-          id: el.id,
-          name: el.name,
-          unreadMessageCount: await this.countUnreadMessages(el.id, userId),
-          userInChat: el.chatUsers.map((element) => {
-            return {
-              id: element.id,
-              firstName: element.user.firstName,
-              lastName: element.user.lastName,
-              userId: element.user.id,
-              }
-            }),
-        }
-      }));
-    return usersInChat;
-  };
-
-
-
   async getChatById (chatId: number): Promise<ChatInformationById> {
     const getChat = await this.chatRepository.findOne({
       where: {
@@ -331,7 +348,7 @@ async getMessageByChatId(chatId: number, userId: number, pageNumber: number, cou
     }
 
 
-    async addUserToChat(chatId: number, userId:number): Promise<any> {
+    async addUserToChat(chatId: number, userId:number,): Promise<any> {
       const chat = await this.chatRepository.findOne({where: {id: chatId}});
       if (!chat){
         console.log(chat)
@@ -363,21 +380,27 @@ async getMessageByChatId(chatId: number, userId: number, pageNumber: number, cou
     
       const chatUser = this.chatUsersRepository.create({chat, user});
       await this.chatUsersRepository.save(chatUser);
+      // this.chatRepository.update({id: chatId}, { name: chat.name + ""})
+      
       console.log(chatUser)
-     // Проверка, является ли чат между двумя пользователями уникальным
   const existingUsersInChat = await this.chatUsersRepository.find({
+    select:{
+      id: true,
+      
+    },
     where: {
       chat: { id: chatId },
     },
     relations: ['user'],
   });
 
-  // Если чат превращается в групповую беседу
-  if (existingUsersInChat.length > 1) {
-    // меняем  название чата или добавляем логику для группового чата
-    chat.name = `Group Chat with ${existingUsersInChat.length} users`;
-    await this.chatRepository.save(chat);
+    chat.name = chat.name + `, ${user.firstName}${" "}${user.lastName}`;
+   
+  if (chat.name.length > 45){
+    chat.name = chat.name.substring(0, 45);
   }
+  await this. chatRepository.update({ id: chatId}, {name: chat.name } )
+
 console.log({...chat, user})
   return {...chat, newUser: {userId: user.id, ...user}}
 }
@@ -401,29 +424,79 @@ async setLastReadMessage(chatId: number, userId: number, lastReadMessageId: numb
     })
   }
 
-  async countUnreadMessages (chatId: number, userId: number): Promise<number>{
-    const chatUser = await this.chatUsersRepository.findOne({
-      where: { 
-        chat: {id: chatId},
-        user: {id: userId}},
-        relations: ['lastMessage']
-    });
-    if (!chatUser){
-      throw new BadRequestException("User not found in this chat");
-    }
-    const lastReadMessageId = chatUser.lastMessage?.id
-    if (!lastReadMessageId) {
-      return 0;
-    }
-   const unreadMessagesCount = await this.messageRepository.count({
+  async countUnreadMessages(chatId: number, userId: number): Promise<number> {
+  const chatUser = await this.chatUsersRepository.findOne({
     where: {
-     chat: {id: chatId},
-     id: MoreThan(lastReadMessageId)
+      chat: { id: chatId },
+      user: { id: userId },
     },
+    relations: ['lastMessage']
+  });
 
-   });
-   console.log(lastReadMessageId)
-   return unreadMessagesCount;
+  if (!chatUser) {
+    throw new BadRequestException("User not found in this chat");
   }
-   
+  const lastReadMessageId = chatUser.lastMessage?.id;
+  
+  if (!lastReadMessageId) {
+    return 0;
+  }
+
+  const unreadMessagesCount = await this.messageRepository.count({
+    where: {
+      chat: { id: chatId },
+      id: MoreThan(lastReadMessageId),
+    },
+  });
+
+  return unreadMessagesCount;
+};
+ 
+async deleteUserFromChat(chatId: number, userId: number, userInitiator: number ){
+   const existUser = await this.userRepository.findOne({where:{id: userInitiator}})
+   if (!existUser){
+    throw new BadRequestException("User not fond");
+   }
+   const existUserInChat = await this.chatUsersRepository.findOne({where: {user: {id: userInitiator}}});
+   if (!existUserInChat){
+    throw new BadRequestException("User not exist in this chat");
+   }
+  const chat = await this.chatRepository.findOne({where: {id: chatId}});
+  if (!chat){
+    throw new BadRequestException("Chat not foud")
+  }
+  const chatUser = await this.chatUsersRepository.findOne({
+    where:{ id: userId, chat: {id: chatId}}
+  })
+  if (!chatUser){ 
+    throw new BadRequestException("User not found")
+  }
+  await this.chatUsersRepository.delete(chatUser.id);
+  throw new BadRequestException("User successfuly deleted");
+
+}
+async leftChat(chatId: number, userInitiator: number ){
+  const existUser = await this.userRepository.findOne({where:{id: userInitiator}})
+  if (!existUser){
+   throw new BadRequestException("User not fond");
+  }
+  const existUserInChat = await this.chatUsersRepository.findOne({where: {user: {id: userInitiator}}});
+  if (!existUserInChat){
+   throw new BadRequestException("User not exist in this chat");
+  }
+ const chat = await this.chatRepository.findOne({where: {id: chatId}});
+ if (!chat){
+   throw new BadRequestException("Chat not foud")
+ }
+  const res = await this.chatUsersRepository.update({chat:{id: chatId}, user: {id: userInitiator}},{isLeft: true})
+  console.log(res);
+  console.log(userInitiator)
+  console.log(chatId)
+  console.log(chat)
+ throw new BadRequestException("Chat successfuly deleted");
+}
+}
+
+function getRawMany() {
+  throw new Error('Function not implemented.');
 }

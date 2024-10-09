@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Param, Post } from '@nestjs/common';
 import { MessageServices } from './message.services';
 import { CreateMessageDto } from './dtos/create-message.dto';
 import { UserInterface } from '../auth/interfaces/user.interface';
@@ -12,4 +12,13 @@ export class MessageController {
   async createMessage (@User() user: UserInterface, @Body() createMessage: CreateMessageDto) {
     return this.messageService.createMessage(user.sub, createMessage);
   }
+  @Delete(':chatId/message/:messageId')
+  async deleteMessage(
+    @Param('chatId') chatId: number,
+    @Param('messageId') messageId: number,
+    @User() user: UserInterface
+  ) {
+    await this.messageService.deleteMessage(chatId, messageId, user.sub);
+  }
+  
 }
